@@ -32,6 +32,12 @@ import carb.settings
 
 import time
 
+# camera
+
+from omni.isaac.sensor import Camera
+import omni.isaac.core.utils.numpy.rotations as rot_utils
+import matplotlib.pyplot as plt
+
 class FrankaRmpFlowExampleScript:
     def __init__(self):
         self._rmpflow = None
@@ -92,6 +98,14 @@ class FrankaRmpFlowExampleScript:
             color=np.array([1, 0, 0]),
         )
         """
+        self._camera = Camera(
+            prim_path="/World/camera",
+            position=np.array([0.5, 0.0, 4]),
+            frequency=20,
+            resolution=(256, 256),
+            orientation=rot_utils.euler_angles_to_quats(np.array([90, 90, -180]), degrees=True),
+        )
+        
         self._ground_plane = GroundPlane("/World/Ground")
 
         # cloth import function
@@ -100,8 +114,13 @@ class FrankaRmpFlowExampleScript:
         self._scene = UsdPhysics.Scene.Define(self._stage, "/World/physicsScene")
         self.add_cloth(self._stage)
 
+        # camera functions
+        self._camera.initialize()
+        self._i = 0
+        self._camera.add_motion_vectors_to_frame()
+
         # Return assets that were added to the stage so that they can be registered with the core.World
-        return self._articulation, self._target, self._ground_plane 
+        return self._articulation, self._target, self._ground_plane, self._camera
         #*self._obstacles, self._goal_block
 
     def setup(self):
@@ -137,6 +156,7 @@ class FrankaRmpFlowExampleScript:
         or attributes at runtime, the user will need to implement necessary resetting
         behavior to ensure their script runs deterministically.
         """
+        self._i = 0
         # Start the script over by recreating the generator.
         self._script_generator = self.my_script()
 
@@ -153,11 +173,39 @@ class FrankaRmpFlowExampleScript:
 
     def update(self, step: float):
         try:
+            result0 = next(self.camera_script())
             result = next(self._script_generator)
         except StopIteration:
             return True
+        
+    def camera_script(self):
+        
+        #print(self._camera.get_current_frame())
+        if self._i == 120:
+            #points_2d = camera.get_image_coords_from_world_points(
+            #    np.array([cube_3.get_world_pose()[0], cube_2.get_world_pose()[0]])
+            #)
+            #points_3d = camera.get_world_points_from_image_coords(points_2d, np.array([24.94, 24.9]))
+            #print(points_2d)
+            #print(points_3d)
+            imgplot = plt.imshow(self._camera.get_rgba()[:, :, :3])
+            plt.show()
+            plt.savefig('aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/proba.png', dpi=200)
+            print("Picture saved")
+            #print(self._camera.get_current_frame()["motion_vectors"])
+
+        #if my_world.is_playing():
+        #    if my_world.current_time_step_index == 0:
+        #        my_world.reset()
+
+        if(self._i < 121):
+            #print(self._i)
+            self._i += 1       
+        
+        yield True
 
     def my_script(self):
+        print("Executing grab and drop script...")
         #do nothing
         translation_target, orientation_target = self._target.get_world_pose()
 
@@ -175,7 +223,7 @@ class FrankaRmpFlowExampleScript:
         yield from self.open_gripper_franka(self._articulation)
 
         # down for the cloth
-        lower_translation_target = np.array([0.6, -0.05, 0.015])
+        lower_translation_target = np.array([0.6, 0, 0.015])
         self._target.set_world_pose(lower_translation_target, orientation_target)
 
         success = yield from self.goto_position(
@@ -183,67 +231,18 @@ class FrankaRmpFlowExampleScript:
         )
 
         yield from self.close_gripper_franka(self._articulation)#, close_position=np.array([0.02, 0.02]), atol=0.006)
-        time.sleep(1)
+        #time.sleep(1)
         
         # up
-        high_translation_target = np.array([0.6, -0.05, 0.5])
+        high_translation_target = np.array([0.6, 0, 0.5])
         self._target.set_world_pose(high_translation_target, orientation_target)
 
         success = yield from self.goto_position(
             high_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
         )
-        time.sleep(2)
+        time.sleep(1)
         yield from self.open_gripper_franka(self._articulation)
-
-    # this script defines goal checkpoints in movements for the task of cube repositioning
-    def my_script2(self):
-        translation_target, orientation_target = self._target.get_world_pose()
-
-        yield from self.close_gripper_franka(self._articulation)
-
-        # Notice that subroutines can still use return statements to exit.  goto_position() returns a boolean to indicate success.
-        success = yield from self.goto_position(
-            translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
-        )
-
-        if not success:
-            print("Could not reach target position")
-            return
-
-        yield from self.open_gripper_franka(self._articulation)
-
-        # Visualize the new target.
-        lower_translation_target = np.array([0.4, 0, 0.04])
-        self._target.set_world_pose(lower_translation_target, orientation_target)
-
-        success = yield from self.goto_position(
-            lower_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=250
-        )
-
-        yield from self.close_gripper_franka(self._articulation, close_position=np.array([0.02, 0.02]), atol=0.006)
-
-        high_translation_target = np.array([0.4, 0, 0.4])
-        self._target.set_world_pose(high_translation_target, orientation_target)
-
-        success = yield from self.goto_position(
-            high_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
-        )
-
-        #next_translation_target = np.array([0.4, 0.4, 0.4])
-        #self._target.set_world_pose(next_translation_target, orientation_target)
-
-        #success = yield from self.goto_position(
-        #    next_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
-        #)
-
-        #next_translation_target = np.array([0.4, 0.4, 0.05])
-        #self._target.set_world_pose(next_translation_target, orientation_target)
-
-        #success = yield from self.goto_position(
-        #    next_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
-        #)
-
-        yield from self.open_gripper_franka(self._articulation)
+        print("Grab and drop procedure finished.")
 
 ######################################################################################################################
 #                                   CLOTH IMPORT AND FUNCTIONS
@@ -252,7 +251,7 @@ class FrankaRmpFlowExampleScript:
     def add_cloth(self, stage):
         # create a mesh that is turned into a cloth
         plane_mesh_path = Sdf.Path(omni.usd.get_stage_next_free_path(stage, "Plane", True))
-        plane_resolution = 100
+        plane_resolution = 50
         plane_width = 40
 
         # reset u/v scale for cube u/v being 1:1 the mesh resolution:
@@ -281,8 +280,8 @@ class FrankaRmpFlowExampleScript:
         plane_mesh = UsdGeom.Mesh.Define(stage, plane_mesh_path)
         self._cloth = plane_mesh
         physicsUtils.setup_transform_as_scale_orient_translate(plane_mesh)
-        physicsUtils.set_or_add_translate_op(plane_mesh, Gf.Vec3f(0.6, -0.1, 0.15)) #  y=1 , z = 0.3
-        physicsUtils.set_or_add_orient_op(plane_mesh, Gf.Quatf(0, Gf.Vec3f( 0, 0, 0))) #Gf.Quatf(0.965925826, Gf.Vec3f( 0.258819045, 0.0, 0.2588190451)))
+        physicsUtils.set_or_add_translate_op(plane_mesh, Gf.Vec3f(0.65, 0, 0.15)) #  y=1 , z = 0.3
+        physicsUtils.set_or_add_orient_op(plane_mesh, Gf.Quatf(0, Gf.Vec3f(0, 0, 0))) #Gf.Quatf(0.965925826, Gf.Vec3f( 0.258819045, 0.0, 0.2588190451)))
         physicsUtils.set_or_add_scale_op(plane_mesh, Gf.Vec3f(1.0))
 
         # configure and create particle system
@@ -312,7 +311,7 @@ class FrankaRmpFlowExampleScript:
         particle_material_path = self._default_prim_path.AppendChild("particleMaterial")
         particleUtils.add_pbd_particle_material(stage, particle_material_path)
         # add some drag and lift to get aerodynamic effects
-        particleUtils.add_pbd_particle_material(stage, particle_material_path, drag=0.1, lift=0.3, friction=0.8) #friction = 0.6
+        particleUtils.add_pbd_particle_material(stage, particle_material_path, drag=0.1, lift=0.3, friction=1) #friction = 0.6
         physicsUtils.add_physics_material_to_prim(
             stage, stage.GetPrimAtPath(particle_system_path), particle_material_path
         )
@@ -321,7 +320,7 @@ class FrankaRmpFlowExampleScript:
         stretchStiffness = 10000.0
         bendStiffness = 200.0
         shearStiffness = 100.0
-        damping = 0.2
+        damping = 0.2 #0.2
         particleUtils.add_physx_particle_cloth(
             stage=stage,
             path=plane_mesh_path,
@@ -401,7 +400,7 @@ class FrankaRmpFlowExampleScript:
                 return True
 
             rmpflow.update_world()
-            action = articulation_motion_policy.ff(1 / 60)
+            action = articulation_motion_policy.get_next_articulation_action(1 / 60)
             articulation.apply_action(action)
 
             # If not done on this frame, yield() to pause execution of this function until
