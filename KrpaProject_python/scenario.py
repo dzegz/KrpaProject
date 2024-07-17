@@ -38,6 +38,13 @@ from omni.isaac.sensor import Camera
 import omni.isaac.core.utils.numpy.rotations as rot_utils
 import matplotlib.pyplot as plt
 
+# positioning
+
+from omni.isaac.dynamic_control import _dynamic_control
+from pxr import Usd
+
+
+
 class FrankaRmpFlowExampleScript:
     def __init__(self):
         self._rmpflow = None
@@ -118,6 +125,10 @@ class FrankaRmpFlowExampleScript:
         self._camera.initialize()
         self._i = 0
         self._camera.add_motion_vectors_to_frame()
+        
+        # corners positioning
+        #self._ic = 0
+        self._target_points = np.array([[0.6, 0, 0.015], [0,0,0], [0,0,0], [0,0,0]])
 
         # Return assets that were added to the stage so that they can be registered with the core.World
         return self._articulation, self._target, self._ground_plane, self._camera
@@ -174,32 +185,78 @@ class FrankaRmpFlowExampleScript:
     def update(self, step: float):
         try:
             result0 = next(self.camera_script())
+            #result1 = next(self.particle_script())
             result = next(self._script_generator)
         except StopIteration:
             return True
+    
+##############################################################################################
+#                           PROCEDURE SCRIPTS
+##############################################################################################
+        
+    def particle_script(self):
+
+        # visually, cloth looks like this with regard to indices:
+        # 0, 51, 102, 153, 204 ........ 2346, 2397, 2448, 2499, 2550
+        # 1 ................................................... 2551
+        # . .................................................... .
+        # 50, 101, 152, 203 ........... 2396, 2447, 2498, 2549, 2600
+        
+        localToWorldTransform = self._xformable.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+
+        # absolute position of cloth
+        position = localToWorldTransform.ExtractTranslation()
+
+        # relative (local) positions of all particles
+        geom_pts = UsdGeom.Points(self._stage.GetPrimAtPath("/Plane"))
+        pos = geom_pts.GetPointsAttr().Get()
+        np_pos = np.array(pos)
+
+        self._abs_pos = np_pos+position # absolute positions of all particles
+
+        # reconfig the z value because of the gripper
+        if(self._abs_pos[208][2] < 0.015):
+            self._abs_pos[208][2] = 0.015 
+        if(self._abs_pos[250][2] < 0.015):
+            self._abs_pos[250][2] = 0.015 
+        if(self._abs_pos[2350][2] < 0.015):
+            self._abs_pos[2350][2] = 0.015 
+        if(self._abs_pos[2392][2] < 0.015):
+            self._abs_pos[2392][2] = 0.015    
+        # points close to corners (not exactly on the corners because of the grasp possibilites)
+        self._target_points = np.array([self._abs_pos[208], self._abs_pos[250], self._abs_pos[2350], self._abs_pos[2392]])
+        #print("target points: ", self._target_points)
+        """"
+        #######################################################################################
+        # nice script to visually check all particles positions :
+        #   comment the >> result = next(self._script_generator)
+        #   in the update function before using this chunk of code
+        #       for iterating positions, initialize self._ic in load_example_assets
+        #       or just use hard-coded value
+        #   also, uncomment >> result1 = next(self.particle_script())
+
+        translation_target, orientation_target = self._target.get_world_pose()
+        lower_translation_target = self._abs_pos[2350]
+        self._target.set_world_pose(lower_translation_target, orientation_target)
+            
+
+        self._ic += 5
+        if(self._ic > self._abs_pos.shape[0]):
+            self._ic = 0
+        #######################################################################################
+        """
+        
+        yield True
         
     def camera_script(self):
         
-        #print(self._camera.get_current_frame())
         if self._i == 120:
-            #points_2d = camera.get_image_coords_from_world_points(
-            #    np.array([cube_3.get_world_pose()[0], cube_2.get_world_pose()[0]])
-            #)
-            #points_3d = camera.get_world_points_from_image_coords(points_2d, np.array([24.94, 24.9]))
-            #print(points_2d)
-            #print(points_3d)
             imgplot = plt.imshow(self._camera.get_rgba()[:, :, :3])
             plt.show()
             plt.savefig('aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/proba.png', dpi=200)
             print("Picture saved")
-            #print(self._camera.get_current_frame()["motion_vectors"])
-
-        #if my_world.is_playing():
-        #    if my_world.current_time_step_index == 0:
-        #        my_world.reset()
 
         if(self._i < 121):
-            #print(self._i)
             self._i += 1       
         
         yield True
@@ -223,7 +280,10 @@ class FrankaRmpFlowExampleScript:
         yield from self.open_gripper_franka(self._articulation)
 
         # down for the cloth
-        lower_translation_target = np.array([0.6, 0, 0.015])
+        yield from self.particle_script()
+        
+        lower_translation_target = self._target_points[0]#np.array([0.6, 0, 0.015])
+        print("Going to: ", lower_translation_target)
         self._target.set_world_pose(lower_translation_target, orientation_target)
 
         success = yield from self.goto_position(
@@ -240,7 +300,7 @@ class FrankaRmpFlowExampleScript:
         success = yield from self.goto_position(
             high_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
         )
-        time.sleep(1)
+        #time.sleep(1)
         yield from self.open_gripper_franka(self._articulation)
         print("Grab and drop procedure finished.")
 
@@ -290,7 +350,7 @@ class FrankaRmpFlowExampleScript:
         particle_system_path = self._default_prim_path.AppendChild("particleSystem")
 
         # size rest offset according to plane resolution and width so that particles are just touching at rest
-        radius = 0.5 * (plane_width / plane_resolution)*0.05
+        radius = 0.3 * (plane_width / plane_resolution)*0.05 #0.5
         restOffset = radius
         contactOffset = restOffset * 1.5
         print("Scene_path:"+str(self._scene.GetPath()))
@@ -315,6 +375,9 @@ class FrankaRmpFlowExampleScript:
         physicsUtils.add_physics_material_to_prim(
             stage, stage.GetPrimAtPath(particle_system_path), particle_material_path
         )
+
+        # for particle positions
+        self._xformable = UsdGeom.Xformable(plane_mesh)
 
         # configure as cloth
         stretchStiffness = 10000.0
