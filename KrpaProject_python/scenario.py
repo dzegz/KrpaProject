@@ -48,6 +48,7 @@ from pxr import Usd
 #import requests
 import unified_planning as up
 from unified_planning.io import PDDLReader
+from unified_planning.shortcuts import *
 #import typing_extensions
 
 class FrankaRmpFlowExampleScript:
@@ -208,7 +209,12 @@ class FrankaRmpFlowExampleScript:
         reader = PDDLReader()
 
         pddl_problem = reader.parse_problem(domain_file, problem_file)
-        print(pddl_problem)
+        #print(pddl_problem)
+
+        # solving the problem
+        with OneshotPlanner(problem_kind=pddl_problem.kind) as planner:
+            result = planner.solve(pddl_problem)
+            print("%s returned: %s" % (planner.name, result.plan))
 
         yield True
 
