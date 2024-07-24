@@ -1,0 +1,16 @@
+(define (problem numero_uno)
+    (:domain first_try)
+    (:objects g - gripper
+        p1 p2 p3 p4 - point)
+    (:init (not (equal p1 p2)) 
+        (not (equal p1 p3))
+        (not (equal p1 p4))
+        (not (equal p2 p3))
+        (not (equal p2 p4))
+        (not (equal p3 p4))
+        (released g))
+    (:goal (and (equal p1 p2) 
+    (equal p3 p4)
+        (released g)))
+        )
+    

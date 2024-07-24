@@ -43,7 +43,12 @@ import matplotlib.pyplot as plt
 from omni.isaac.dynamic_control import _dynamic_control
 from pxr import Usd
 
+# pddl
 
+#import requests
+import unified_planning as up
+from unified_planning.io import PDDLReader
+#import typing_extensions
 
 class FrankaRmpFlowExampleScript:
     def __init__(self):
@@ -125,7 +130,7 @@ class FrankaRmpFlowExampleScript:
         self._camera.initialize()
         self._i = 0
         self._camera.add_motion_vectors_to_frame()
-        
+
         # corners positioning
         #self._ic = 0
         self._target_points = np.array([[0.6, 0, 0.015], [0,0,0], [0,0,0], [0,0,0]])
@@ -193,7 +198,20 @@ class FrankaRmpFlowExampleScript:
 ##############################################################################################
 #                           PROCEDURE SCRIPTS
 ##############################################################################################
-        
+
+    def planning_script(self):
+
+        domain_file = "/home/student/aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/domain.pddl"
+        problem_file = "/home/student/aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/problem.pddl"
+
+
+        reader = PDDLReader()
+
+        pddl_problem = reader.parse_problem(domain_file, problem_file)
+        print(pddl_problem)
+
+        yield True
+
     def particle_script(self):
 
         # visually, cloth looks like this with regard to indices:
@@ -253,7 +271,7 @@ class FrankaRmpFlowExampleScript:
         if self._i == 120:
             imgplot = plt.imshow(self._camera.get_rgba()[:, :, :3])
             plt.show()
-            plt.savefig('aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/proba.png', dpi=200)
+            plt.savefig('/home/student/aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/proba.png', dpi=200)
             print("Picture saved")
 
         if(self._i < 121):
@@ -279,6 +297,7 @@ class FrankaRmpFlowExampleScript:
         
         yield from self.open_gripper_franka(self._articulation)
 
+        yield from self.planning_script()
         # down for the cloth
         yield from self.particle_script()
         
