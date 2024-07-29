@@ -45,11 +45,16 @@ from pxr import Usd
 
 # pddl
 
-#import requests
 import unified_planning as up
 from unified_planning.io import PDDLReader
 from unified_planning.shortcuts import *
-#import typing_extensions
+
+import re
+
+# constants
+
+min_height = 0.011 #min height for franka not to collide with floor
+cloth_main_resolution = 90
 
 class FrankaRmpFlowExampleScript:
     def __init__(self):
@@ -134,7 +139,7 @@ class FrankaRmpFlowExampleScript:
 
         # corners positioning
         #self._ic = 0
-        self._target_points = np.array([[0.6, 0, 0.015], [0,0,0], [0,0,0], [0,0,0]])
+        self._target_points = np.array([[0.6, 0, min_height], [0,0,0], [0,0,0], [0,0,0]])
 
         # Return assets that were added to the stage so that they can be registered with the core.World
         return self._articulation, self._target, self._ground_plane, self._camera
@@ -190,7 +195,7 @@ class FrankaRmpFlowExampleScript:
 
     def update(self, step: float):
         try:
-            result0 = next(self.camera_script())
+            #result0 = next(self.camera_script())
             #result1 = next(self.particle_script())
             result = next(self._script_generator)
         except StopIteration:
@@ -199,6 +204,107 @@ class FrankaRmpFlowExampleScript:
 ##############################################################################################
 #                           PROCEDURE SCRIPTS
 ##############################################################################################
+    def grip_handler(self, current_point, parsed_action, orientation_target):
+        print(f"Going to {parsed_action['parameters'][1]} - {current_point}")
+        self._target.set_world_pose(current_point, orientation_target)
+
+        success = yield from self.goto_position(
+            current_point, orientation_target, self._articulation, self._rmpflow, timeout=250
+        )
+
+        yield from self.close_gripper_franka(self._articulation)
+
+    def p2p_handler(self, current_point, target_point_id, parsed_action, orientation_target):
+        print(f"Going from {parsed_action['parameters'][1]} to {parsed_action['parameters'][2]} - {current_point}")
+        
+        
+        # for better path
+        middle_point = (current_point+self._target_points[target_point_id])/2 + np.array([0, 0, 0.1])
+
+        print("Going up middle: ", middle_point)
+        self._target.set_world_pose(middle_point, orientation_target)
+
+        success = yield from self.goto_position(
+            middle_point, orientation_target, self._articulation, self._rmpflow, timeout=250
+        )
+
+        # final target (next point pX)
+        yield from self.particle_script()
+        final_point = self._target_points[target_point_id] + np.array([0, 0, 0.05])
+        print("Going to destination", final_point)
+        self._target.set_world_pose(final_point, orientation_target)
+
+        success = yield from self.goto_position(
+            final_point, orientation_target, self._articulation, self._rmpflow, timeout=2500     
+        )
+        
+
+    def understanding_script(self):
+        plan_str = str(self._result.plan)
+        actions = plan_str.split('\n')  
+        parsed_actions = []
+        action_pattern = re.compile(r'(\w+)\(([^)]+)\)')
+
+        # Parsing each action
+        for action in actions:
+            match = action_pattern.match(action.strip())
+            if match:
+                action_name = match.group(1)
+                parameters = [param.strip() for param in match.group(2).split(',')]
+                parsed_actions.append({'action': action_name, 'parameters': parameters})
+
+        # Printing the parsed actions
+        for parsed_action in parsed_actions:
+            print(f"Action: {parsed_action['action']}, Parameters: {parsed_action['parameters']}")
+        
+
+        # handling the acquired actions
+        current_point, orientation_target = self._target.get_world_pose()
+        
+        for parsed_action in parsed_actions:
+            #refreshing the positions
+            time.sleep(0.5)
+            yield from self.particle_script()
+
+
+            action_name = parsed_action['action']
+            parameters = parsed_action['parameters']
+            if action_name == "grip":
+                if parameters == ['g', 'p1']:
+                    print("Grip action with parameters g, p1")
+                    current_point = self._target_points[0]
+                    yield from self.grip_handler(current_point, parsed_action, orientation_target)
+                    
+                elif parameters == ['g', 'p3']:
+                    print("Grip action with parameters g, p3")
+                    current_point = self._target_points[2]
+                    yield from self.grip_handler(current_point, parsed_action, orientation_target)
+
+            elif action_name == "p2p":
+                if parameters == ['g', 'p1', 'p2']:
+                    print("p2p action with parameters g, p1, p2")
+                    current_point = self._target_points[0]
+                    #target_point = self._target_points[1]
+                    yield from self.p2p_handler(current_point, 1, parsed_action, orientation_target)
+                elif parameters == ['g', 'p3', 'p4']:
+                    print("p2p action with parameters g, p3, p4")
+                    current_point = self._target_points[2]
+                    #target_point = self._target_points[3]
+                    yield from self.p2p_handler(current_point, 3, parsed_action, orientation_target)
+
+            elif action_name == "release":
+                if parameters == ['g', 'p1']:
+                    print("Release action with parameters g, p1")
+                    yield from self.open_gripper_franka(self._articulation)
+                    time.sleep(0.5)
+                elif parameters == ['g', 'p3']:
+                    print("Release action with parameters g, p3")
+                    yield from self.open_gripper_franka(self._articulation)
+                    time.sleep(0.5)
+            else:
+                print(f"Unknown action: {action_name} with parameters {parameters}")
+    
+        yield True
 
     def planning_script(self):
 
@@ -211,10 +317,13 @@ class FrankaRmpFlowExampleScript:
         pddl_problem = reader.parse_problem(domain_file, problem_file)
         #print(pddl_problem)
 
+        # disabling the credits
+        up.shortcuts.get_environment().credits_stream = None
+
         # solving the problem
         with OneshotPlanner(problem_kind=pddl_problem.kind) as planner:
-            result = planner.solve(pddl_problem)
-            print("%s returned: %s" % (planner.name, result.plan))
+            self._result = planner.solve(pddl_problem)
+            print("%s returned: %s" % (planner.name, self._result.plan))
 
         yield True
 
@@ -225,6 +334,11 @@ class FrankaRmpFlowExampleScript:
         # 1 ................................................... 2551
         # . .................................................... .
         # 50, 101, 152, 203 ........... 2396, 2447, 2498, 2549, 2600
+        p1_id = int((cloth_main_resolution+1)*((cloth_main_resolution+1)**2/((cloth_main_resolution+1)*10))) #260.1
+        p2_id = int(p1_id+cloth_main_resolution-1.5*((cloth_main_resolution+1)**2/((cloth_main_resolution+1)*10))) 
+        p4_id = int((cloth_main_resolution+1)**2-p1_id)
+        p3_id = int(p4_id-cloth_main_resolution+1.5*((cloth_main_resolution+1)**2/((cloth_main_resolution+1)*10)))
+        print("brojevi: ", p1_id, "/", p2_id, "/", p3_id, "/", p4_id)
         
         localToWorldTransform = self._xformable.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
 
@@ -239,16 +353,16 @@ class FrankaRmpFlowExampleScript:
         self._abs_pos = np_pos+position # absolute positions of all particles
 
         # reconfig the z value because of the gripper
-        if(self._abs_pos[208][2] < 0.015):
-            self._abs_pos[208][2] = 0.015 
-        if(self._abs_pos[250][2] < 0.015):
-            self._abs_pos[250][2] = 0.015 
-        if(self._abs_pos[2350][2] < 0.015):
-            self._abs_pos[2350][2] = 0.015 
-        if(self._abs_pos[2392][2] < 0.015):
-            self._abs_pos[2392][2] = 0.015    
+        if(self._abs_pos[p1_id][2] < min_height): #208, 250, 2350, 2392
+            self._abs_pos[p1_id][2] = min_height 
+        if(self._abs_pos[p2_id][2] < min_height):
+            self._abs_pos[p2_id][2] = min_height 
+        if(self._abs_pos[p3_id][2] < min_height):
+            self._abs_pos[p3_id][2] = min_height 
+        if(self._abs_pos[p4_id][2] < min_height):
+            self._abs_pos[p4_id][2] = min_height    
         # points close to corners (not exactly on the corners because of the grasp possibilites)
-        self._target_points = np.array([self._abs_pos[208], self._abs_pos[250], self._abs_pos[2350], self._abs_pos[2392]])
+        self._target_points = np.array([self._abs_pos[p1_id], self._abs_pos[p2_id], self._abs_pos[p3_id], self._abs_pos[p4_id]])
         #print("target points: ", self._target_points)
         """"
         #######################################################################################
@@ -273,8 +387,9 @@ class FrankaRmpFlowExampleScript:
         yield True
         
     def camera_script(self):
-        
+        # camera_script is designed for cv2 methods usage
         if self._i == 120:
+            
             imgplot = plt.imshow(self._camera.get_rgba()[:, :, :3])
             plt.show()
             plt.savefig('/home/student/aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/proba.png', dpi=200)
@@ -303,12 +418,16 @@ class FrankaRmpFlowExampleScript:
         
         yield from self.open_gripper_franka(self._articulation)
 
-        yield from self.planning_script()
-        # down for the cloth
         yield from self.particle_script()
+
+        yield from self.planning_script()
+
+        yield from self.understanding_script()
+        # down for the cloth
         
-        lower_translation_target = self._target_points[0]#np.array([0.6, 0, 0.015])
-        print("Going to: ", lower_translation_target)
+        
+        lower_translation_target = self._target_points[0]#np.array([0.6, 0, min_height])
+        print("(main)Going to: ", lower_translation_target)
         self._target.set_world_pose(lower_translation_target, orientation_target)
 
         success = yield from self.goto_position(
@@ -317,7 +436,7 @@ class FrankaRmpFlowExampleScript:
 
         yield from self.close_gripper_franka(self._articulation)#, close_position=np.array([0.02, 0.02]), atol=0.006)
         #time.sleep(1)
-        
+        print("(main) upping")
         # up
         high_translation_target = np.array([0.6, 0, 0.5])
         self._target.set_world_pose(high_translation_target, orientation_target)
@@ -336,7 +455,7 @@ class FrankaRmpFlowExampleScript:
     def add_cloth(self, stage):
         # create a mesh that is turned into a cloth
         plane_mesh_path = Sdf.Path(omni.usd.get_stage_next_free_path(stage, "Plane", True))
-        plane_resolution = 50
+        plane_resolution = cloth_main_resolution
         plane_width = 40
 
         # reset u/v scale for cube u/v being 1:1 the mesh resolution:
@@ -365,7 +484,7 @@ class FrankaRmpFlowExampleScript:
         plane_mesh = UsdGeom.Mesh.Define(stage, plane_mesh_path)
         self._cloth = plane_mesh
         physicsUtils.setup_transform_as_scale_orient_translate(plane_mesh)
-        physicsUtils.set_or_add_translate_op(plane_mesh, Gf.Vec3f(0.65, 0, 0.15)) #  y=1 , z = 0.3
+        physicsUtils.set_or_add_translate_op(plane_mesh, Gf.Vec3f(0.5, 0, 0.05)) #  y=1 , z = 0.3
         physicsUtils.set_or_add_orient_op(plane_mesh, Gf.Quatf(0, Gf.Vec3f(0, 0, 0))) #Gf.Quatf(0.965925826, Gf.Vec3f( 0.258819045, 0.0, 0.2588190451)))
         physicsUtils.set_or_add_scale_op(plane_mesh, Gf.Vec3f(1.0))
 
@@ -375,7 +494,7 @@ class FrankaRmpFlowExampleScript:
         particle_system_path = self._default_prim_path.AppendChild("particleSystem")
 
         # size rest offset according to plane resolution and width so that particles are just touching at rest
-        radius = 0.3 * (plane_width / plane_resolution)*0.05 #0.5
+        radius = 0.015 * (plane_width / plane_resolution) #0.5
         restOffset = radius
         contactOffset = restOffset * 1.5
         print("Scene_path:"+str(self._scene.GetPath()))
@@ -388,7 +507,7 @@ class FrankaRmpFlowExampleScript:
             particle_contact_offset=contactOffset,
             solid_rest_offset=restOffset,
             fluid_rest_offset=0.0,
-            solver_position_iterations=16,
+            solver_position_iterations=32,
             simulation_owner=self._scene.GetPath(),
         )
 
@@ -397,6 +516,7 @@ class FrankaRmpFlowExampleScript:
         particleUtils.add_pbd_particle_material(stage, particle_material_path)
         # add some drag and lift to get aerodynamic effects
         particleUtils.add_pbd_particle_material(stage, particle_material_path, drag=0.1, lift=0.3, friction=1) #friction = 0.6
+        # last working lift = 0.3, friction=1
         physicsUtils.add_physics_material_to_prim(
             stage, stage.GetPrimAtPath(particle_system_path), particle_material_path
         )
@@ -405,9 +525,9 @@ class FrankaRmpFlowExampleScript:
         self._xformable = UsdGeom.Xformable(plane_mesh)
 
         # configure as cloth
-        stretchStiffness = 10000.0
-        bendStiffness = 200.0
-        shearStiffness = 100.0
+        stretchStiffness = 10000.0 #10000
+        bendStiffness = 50.0 #200
+        shearStiffness = 100.0 #100
         damping = 0.2 #0.2
         particleUtils.add_physx_particle_cloth(
             stage=stage,
@@ -423,7 +543,7 @@ class FrankaRmpFlowExampleScript:
         )
 
         # configure mass:
-        particle_mass = 0.01 * (plane_width / (4*plane_resolution)) #0.02 default mass constant
+        particle_mass = 0.005 * (plane_width / (4*plane_resolution)) #0.02 default mass constant
         num_verts = len(plane_mesh.GetPointsAttr().Get())
         mass = particle_mass * num_verts
         massApi = UsdPhysics.MassAPI.Apply(plane_mesh.GetPrim())
