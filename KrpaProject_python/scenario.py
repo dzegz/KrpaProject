@@ -53,7 +53,7 @@ import re
 
 # constants
 
-min_height = 0.011 #min height for franka not to collide with floor
+min_height = 0.01 #min height for franka not to collide with floor
 cloth_main_resolution = 90
 
 class FrankaRmpFlowExampleScript:
@@ -236,8 +236,7 @@ class FrankaRmpFlowExampleScript:
 
         success = yield from self.goto_position(
             final_point, orientation_target, self._articulation, self._rmpflow, timeout=2500     
-        )
-        
+        )     
 
     def understanding_script(self):
         plan_str = str(self._result.plan)
@@ -254,8 +253,8 @@ class FrankaRmpFlowExampleScript:
                 parsed_actions.append({'action': action_name, 'parameters': parameters})
 
         # Printing the parsed actions
-        for parsed_action in parsed_actions:
-            print(f"Action: {parsed_action['action']}, Parameters: {parsed_action['parameters']}")
+        #for parsed_action in parsed_actions:
+        #    print(f"Action: {parsed_action['action']}, Parameters: {parsed_action['parameters']}")
         
 
         # handling the acquired actions
@@ -301,6 +300,14 @@ class FrankaRmpFlowExampleScript:
                     print("Release action with parameters g, p3")
                     yield from self.open_gripper_franka(self._articulation)
                     time.sleep(0.5)
+
+                # go up after releasing
+                translation_target, orientation_target = self._target.get_world_pose()
+                self._target.set_world_pose(translation_target+np.array([0, 0, 0.1]), orientation_target)
+
+                success = yield from self.goto_position(
+                    translation_target+np.array([0, 0, 0.1]), orientation_target, self._articulation, self._rmpflow, timeout=2500     
+                ) 
             else:
                 print(f"Unknown action: {action_name} with parameters {parameters}")
     
@@ -335,10 +342,13 @@ class FrankaRmpFlowExampleScript:
         # . .................................................... .
         # 50, 101, 152, 203 ........... 2396, 2447, 2498, 2549, 2600
         p1_id = int((cloth_main_resolution+1)*((cloth_main_resolution+1)**2/((cloth_main_resolution+1)*10))) #260.1
-        p2_id = int(p1_id+cloth_main_resolution-1.5*((cloth_main_resolution+1)**2/((cloth_main_resolution+1)*10))) 
+        #p2_id = int(p1_id+cloth_main_resolution-1.5*((cloth_main_resolution+1)**2/((cloth_main_resolution+1)*10))) 
+        p2_id = int(cloth_main_resolution)
         p4_id = int((cloth_main_resolution+1)**2-p1_id)
         p3_id = int(p4_id-cloth_main_resolution+1.5*((cloth_main_resolution+1)**2/((cloth_main_resolution+1)*10)))
-        print("brojevi: ", p1_id, "/", p2_id, "/", p3_id, "/", p4_id)
+        p4_id = int((cloth_main_resolution+1)**2-1)
+        print("-----------------------------------------------------------")
+        print("Corners IDs: ", p1_id, "/", p2_id, "/", p3_id, "/", p4_id)
         
         localToWorldTransform = self._xformable.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
 
@@ -401,19 +411,17 @@ class FrankaRmpFlowExampleScript:
         yield True
 
     def my_script(self):
-        print("Executing grab and drop script...")
-        #do nothing
+        print("[MAIN] Executing grab and drop script...")
         translation_target, orientation_target = self._target.get_world_pose()
 
         yield from self.close_gripper_franka(self._articulation)
 
-        # Notice that subroutines can still use return statements to exit.  goto_position() returns a boolean to indicate success.
         success = yield from self.goto_position(
             translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
         )
 
         if not success:
-            print("Could not reach target position")
+            print("[MAIN] Could not reach target position")
             return
         
         yield from self.open_gripper_franka(self._articulation)
@@ -423,30 +431,16 @@ class FrankaRmpFlowExampleScript:
         yield from self.planning_script()
 
         yield from self.understanding_script()
-        # down for the cloth
         
-        
-        lower_translation_target = self._target_points[0]#np.array([0.6, 0, min_height])
-        print("(main)Going to: ", lower_translation_target)
-        self._target.set_world_pose(lower_translation_target, orientation_target)
-
-        success = yield from self.goto_position(
-            lower_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=250
-        )
-
-        yield from self.close_gripper_franka(self._articulation)#, close_position=np.array([0.02, 0.02]), atol=0.006)
-        #time.sleep(1)
-        print("(main) upping")
-        # up
-        high_translation_target = np.array([0.6, 0, 0.5])
+        print("[MAIN] Going up")
+        yield from self.open_gripper_franka(self._articulation)
+        high_translation_target = np.array([0.6, 0, 0.2])
         self._target.set_world_pose(high_translation_target, orientation_target)
 
         success = yield from self.goto_position(
             high_translation_target, orientation_target, self._articulation, self._rmpflow, timeout=200
         )
-        #time.sleep(1)
-        yield from self.open_gripper_franka(self._articulation)
-        print("Grab and drop procedure finished.")
+        print("[MAIN] Grab and drop procedure finished.")
 
 ######################################################################################################################
 #                                   CLOTH IMPORT AND FUNCTIONS
@@ -494,9 +488,9 @@ class FrankaRmpFlowExampleScript:
         particle_system_path = self._default_prim_path.AppendChild("particleSystem")
 
         # size rest offset according to plane resolution and width so that particles are just touching at rest
-        radius = 0.015 * (plane_width / plane_resolution) #0.5
+        radius = 0.008 * (plane_width / plane_resolution) #0.5
         restOffset = radius
-        contactOffset = restOffset * 1.5
+        contactOffset = restOffset * 0.001 #1.5
         print("Scene_path:"+str(self._scene.GetPath()))
         print("particle_system_path:"+str(particle_system_path))
         particleUtils.add_physx_particle_system(
@@ -525,8 +519,8 @@ class FrankaRmpFlowExampleScript:
         self._xformable = UsdGeom.Xformable(plane_mesh)
 
         # configure as cloth
-        stretchStiffness = 10000.0 #10000
-        bendStiffness = 50.0 #200
+        stretchStiffness = 500.0 #10000
+        bendStiffness = 20.0 #200
         shearStiffness = 100.0 #100
         damping = 0.2 #0.2
         particleUtils.add_physx_particle_cloth(
