@@ -17,7 +17,7 @@ from omni.isaac.ui.element_wrappers import CollapsableFrame, StateButton
 from omni.isaac.ui.element_wrappers.core_connectors import LoadButton, ResetButton
 from omni.isaac.ui.ui_utils import get_style
 from omni.usd import StageEventType
-from pxr import Sdf, UsdLux
+from pxr import Sdf, UsdLux, PhysxSchema
 
 from .scenario import FrankaRmpFlowExampleScript
 

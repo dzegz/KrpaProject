@@ -8,8 +8,10 @@
 #
 
 import numpy as np
+
+from omni.isaac.core import *#PhysicsContext, SimulationContext
 from omni.isaac.core.articulations import Articulation
-from omni.isaac.core.objects import DynamicCuboid, FixedCuboid, GroundPlane
+from omni.isaac.core.objects import GroundPlane
 from omni.isaac.core.prims import XFormPrim
 from omni.isaac.core.utils import distance_metrics
 from omni.isaac.core.utils.nucleus import get_assets_root_path
@@ -22,7 +24,7 @@ from omni.isaac.motion_generation.interface_config_loader import load_supported_
 
 # cloth requirements
 from omni.physx.scripts import physicsUtils, particleUtils
-from pxr import UsdGeom, Gf, Sdf, UsdPhysics, UsdShade
+from pxr import UsdGeom, Gf, Sdf, UsdPhysics, UsdShade, PhysxSchema
 
 import math
 import omni.usd
@@ -51,6 +53,10 @@ from unified_planning.shortcuts import *
 
 import re
 
+# orientation
+
+from scipy.spatial.transform import Rotation as R
+
 # constants
 
 min_height = 0.01 #min height for franka not to collide with floor
@@ -75,7 +81,6 @@ class FrankaRmpFlowExampleScript:
         The position in which things are loaded is also the position to which
         they will be returned on reset.
         """
-
         robot_prim_path = "/panda"
         path_to_robot_usd = get_assets_root_path() + "/Isaac/Robots/Franka/franka.usd"
 
@@ -89,33 +94,7 @@ class FrankaRmpFlowExampleScript:
             position=np.array([0.4, 0, 0.25]),
             orientation=euler_angles_to_quats([0, np.pi, 0]),
         )
-        """
-        self._obstacles = [
-            FixedCuboid(
-                name="ob1",
-                prim_path="/World/obstacle_1",
-                scale=np.array([0.03, 1.0, 0.3]),
-                position=np.array([0.25, 0.25, 0.15]),
-                color=np.array([0.0, 0.0, 1.0]),
-            ),
-            FixedCuboid(
-                name="ob2",
-                prim_path="/World/obstacle_2",
-                scale=np.array([0.5, 0.03, 0.3]),
-                position=np.array([0.5, 0.25, 0.15]),
-                color=np.array([0.0, 0.0, 1.0]),
-            ),
-        ]
         
-        
-        self._goal_block = DynamicCuboid(
-            name="Cube",
-            position=np.array([0.4, 0.4, 0.025]),
-            prim_path="/World/pick_cube",
-            size=0.05,
-            color=np.array([1, 0, 0]),
-        )
-        """
         self._camera = Camera(
             prim_path="/World/camera",
             position=np.array([0.5, 0.0, 4]),
@@ -130,6 +109,27 @@ class FrankaRmpFlowExampleScript:
         self._stage = omni.usd.get_context().get_stage()
         self._default_prim_path = Sdf.Path("/World")
         self._scene = UsdPhysics.Scene.Define(self._stage, "/World/physicsScene")
+
+        # doesnt work
+        # physx_scene_api = PhysxSchema.PhysxSceneAPI.Apply(self._scene.GetPrim())
+        # physx_scene_api.CreateEnableGPUDynamicsAttr().Set(True)
+        # gpu_dynamics_enabled = physx_scene_api.GetEnableGPUDynamicsAttr().Get()
+        #print("Current GPU Dynamics Enabled:", gpu_dynamics_enabled)
+
+        # test
+       # PhysxSchema.PhysxSceneAPI.Apply(self._stage.GetPrimAtPath("/World/physicsScene"))
+        
+       # physxSceneAPI = PhysxSchema.PhysxSceneAPI.Get(self._stage, "/World/physicsScene")
+       # physxSceneAPI.CreateEnableGPUDynamicsAttr(True)
+
+
+        # simulation_context = SimulationContext()
+        # kontekst = simulation_context.get_physics_context()
+        # print(kontekst)
+        # kontekst.enable_gpu_dynamics(True)
+        #print("sta: ", kontekst.device)
+        #############
+
         self.add_cloth(self._stage)
 
         # camera functions
@@ -204,7 +204,31 @@ class FrankaRmpFlowExampleScript:
 ##############################################################################################
 #                           PROCEDURE SCRIPTS
 ##############################################################################################
-    def grip_handler(self, current_point, parsed_action, orientation_target):
+    def quaternion_multiply(self, q1, q2):
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2
+        ])
+
+    def grip_handler(self, current_point, parsed_action, orientation_target, want_orientation = False):
+        # position before movement
+        translation_target0, orientation_target0 = self._target.get_world_pose()
+        
+        # orientation target calculation
+        P2 = self._close_points[1]
+        P3 = self._close_points[0]
+        theta = math.pi - math.atan2(P3[1]-current_point[1],P3[0]-current_point[0])-math.atan2(P2[1]-current_point[1],P2[0]-current_point[0])
+        rotation_quaternion = R.from_euler('x', theta).as_quat()
+        new_orient = self.quaternion_multiply(orientation_target0, rotation_quaternion)
+       
+        if want_orientation:
+            orientation_target = new_orient
+            print("Orientation target changed | New OT: ", new_orient)
+        
         print(f"Going to {parsed_action['parameters'][1]} - {current_point}")
         self._target.set_world_pose(current_point, orientation_target)
 
@@ -277,7 +301,7 @@ class FrankaRmpFlowExampleScript:
                 elif parameters == ['g', 'p3']:
                     print("Grip action with parameters g, p3")
                     current_point = self._target_points[2]
-                    yield from self.grip_handler(current_point, parsed_action, orientation_target)
+                    yield from self.grip_handler(current_point, parsed_action, orientation_target, True)
 
             elif action_name == "p2p":
                 if parameters == ['g', 'p1', 'p2']:
@@ -295,11 +319,11 @@ class FrankaRmpFlowExampleScript:
                 if parameters == ['g', 'p1']:
                     print("Release action with parameters g, p1")
                     yield from self.open_gripper_franka(self._articulation)
-                    time.sleep(0.5)
+                    #time.sleep(0.5)
                 elif parameters == ['g', 'p3']:
                     print("Release action with parameters g, p3")
                     yield from self.open_gripper_franka(self._articulation)
-                    time.sleep(0.5)
+                    #time.sleep(0.5)
 
                 # go up after releasing
                 translation_target, orientation_target = self._target.get_world_pose()
@@ -318,7 +342,6 @@ class FrankaRmpFlowExampleScript:
         domain_file = "/home/student/aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/domain.pddl"
         problem_file = "/home/student/aldin/isaac_sim_ws/extensions/KrpaProject/KrpaProject_python/problem.pddl"
 
-
         reader = PDDLReader()
 
         pddl_problem = reader.parse_problem(domain_file, problem_file)
@@ -331,7 +354,7 @@ class FrankaRmpFlowExampleScript:
         with OneshotPlanner(problem_kind=pddl_problem.kind) as planner:
             self._result = planner.solve(pddl_problem)
             print("%s returned: %s" % (planner.name, self._result.plan))
-
+        
         yield True
 
     def particle_script(self):
@@ -374,6 +397,7 @@ class FrankaRmpFlowExampleScript:
         # points close to corners (not exactly on the corners because of the grasp possibilites)
         self._target_points = np.array([self._abs_pos[p1_id], self._abs_pos[p2_id], self._abs_pos[p3_id], self._abs_pos[p4_id]])
         #print("target points: ", self._target_points)
+        self._close_points = np.array([self._abs_pos[p3_id+15], self._abs_pos[p3_id-(cloth_main_resolution+1)*15]])
         """"
         #######################################################################################
         # nice script to visually check all particles positions :
@@ -488,7 +512,7 @@ class FrankaRmpFlowExampleScript:
         particle_system_path = self._default_prim_path.AppendChild("particleSystem")
 
         # size rest offset according to plane resolution and width so that particles are just touching at rest
-        radius = 0.008 * (plane_width / plane_resolution) #0.5
+        radius = 0.012 * (plane_width / plane_resolution) #0.5
         restOffset = radius
         contactOffset = restOffset * 0.001 #1.5
         print("Scene_path:"+str(self._scene.GetPath()))
@@ -501,7 +525,7 @@ class FrankaRmpFlowExampleScript:
             particle_contact_offset=contactOffset,
             solid_rest_offset=restOffset,
             fluid_rest_offset=0.0,
-            solver_position_iterations=32,
+            solver_position_iterations=16,
             simulation_owner=self._scene.GetPath(),
         )
 
@@ -509,7 +533,7 @@ class FrankaRmpFlowExampleScript:
         particle_material_path = self._default_prim_path.AppendChild("particleMaterial")
         particleUtils.add_pbd_particle_material(stage, particle_material_path)
         # add some drag and lift to get aerodynamic effects
-        particleUtils.add_pbd_particle_material(stage, particle_material_path, drag=0.1, lift=0.3, friction=1) #friction = 0.6
+        particleUtils.add_pbd_particle_material(stage, particle_material_path, drag=0.1, lift=0.1, friction=0.3) #friction = 0.6
         # last working lift = 0.3, friction=1
         physicsUtils.add_physics_material_to_prim(
             stage, stage.GetPrimAtPath(particle_system_path), particle_material_path
@@ -519,7 +543,7 @@ class FrankaRmpFlowExampleScript:
         self._xformable = UsdGeom.Xformable(plane_mesh)
 
         # configure as cloth
-        stretchStiffness = 500.0 #10000
+        stretchStiffness = 2500.0 #10000
         bendStiffness = 20.0 #200
         shearStiffness = 100.0 #100
         damping = 0.2 #0.2
