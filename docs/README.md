@@ -1,6 +1,7 @@
 # KrpaProject - cloth manipulation with Franka based on automated planning
 
 Jozef Stefan Institute & Faculty of electrical engineering Sarajevo 
+
 Started on July 2024.
 
 # Usage
