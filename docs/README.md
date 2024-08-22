@@ -2,7 +2,7 @@
 
 Jozef Stefan Institute & Faculty of electrical engineering Sarajevo 
 
-Started on July 2024.
+Started in July 2024.
 
 # Usage
 
